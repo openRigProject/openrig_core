@@ -1,0 +1,13 @@
+name: openrig_core
+description: Shared Dart library for openRig — rigctld, DX Cluster, ADIF, mDNS.
+version: 0.1.0
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  multicast_dns: ^0.3.2   # mDNS browsing (_openrig._tcp, _rigctld._tcp)
+
+dev_dependencies:
+  lints: ^3.0.0
+  test: ^1.24.0
