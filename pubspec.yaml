@@ -6,6 +6,8 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
+  ffi: ^2.1.0             # FFI helpers (malloc/calloc allocators, Utf8 strings)
+  http: ^1.2.0            # HTTP client for openRig management API
   multicast_dns: ^0.3.2   # mDNS browsing (_openrig._tcp, _rigctld._tcp)
 
 dev_dependencies:
