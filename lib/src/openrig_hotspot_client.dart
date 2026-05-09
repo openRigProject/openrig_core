@@ -10,6 +10,8 @@ import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
+import 'openrig_api_models.dart';
+
 // ── Data models ─────────────────────────────────────────────────────────────
 
 /// A single entry from the last-heard stream.
@@ -105,7 +107,9 @@ class OpenRigHotspotClient {
   final int port;
   final http.Client _http;
 
-  static const _base = '/openrig.v1.HotspotService';
+  static const _hotspotBase = '/openrig.v1.HotspotService';
+  static const _deviceBase = '/openrig.v1.DeviceService';
+  static const _wifiBase = '/openrig.v1.WifiService';
 
   OpenRigHotspotClient({required this.host, this.port = 7373})
       : _http = http.Client();
@@ -116,10 +120,10 @@ class OpenRigHotspotClient {
 
   // ── Unary helper ────────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>> _call(String method,
+  Future<Map<String, dynamic>> _callAt(String serviceBase, String method,
       [Map<String, dynamic>? body]) async {
     final resp = await _http.post(
-      _uri('$_base/$method'),
+      _uri('$serviceBase/$method'),
       headers: {
         'Content-Type': 'application/json',
         'Connect-Protocol-Version': '1',
@@ -131,6 +135,175 @@ class OpenRigHotspotClient {
           '$method returned HTTP ${resp.statusCode}: ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> _call(String method,
+      [Map<String, dynamic>? body]) =>
+      _callAt(_hotspotBase, method, body);
+
+  // ── DeviceService ────────────────────────────────────────────────────────
+
+  Future<DeviceStatus> getStatus() async {
+    final j = await _callAt(_deviceBase, 'GetStatus');
+    return DeviceStatus(
+      type: j['deviceType'] as String? ?? '',
+      callsign: j['callsign'] as String? ?? '',
+      hostname: j['hostname'] as String? ?? '',
+      version: j['version'] as String? ?? '',
+      uptime: (j['uptime'] as num?)?.toInt() ?? 0,
+      provisioned: j['provisioned'] as bool? ?? false,
+      cpuPercent: (j['cpuPercent'] as num?)?.toDouble() ?? 0.0,
+      memTotalMb: (j['memTotalMb'] as num?)?.toInt() ?? 0,
+      memUsedMb: (j['memUsedMb'] as num?)?.toInt() ?? 0,
+      diskTotalGb: (j['diskTotalGb'] as num?)?.toDouble() ?? 0.0,
+      diskUsedGb: (j['diskUsedGb'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+
+  Future<void> restartService(String service) async {
+    await _callAt(_deviceBase, 'RestartService', {'service': service});
+  }
+
+  Future<void> reboot() async {
+    await _callAt(_deviceBase, 'Reboot', {});
+  }
+
+  // ── WifiService ──────────────────────────────────────────────────────────
+
+  Future<NetworkStatus> getNetworkStatus() async {
+    final j = await _callAt(_wifiBase, 'GetNetwork');
+    return NetworkStatus(
+      mode: j['mode'] as String? ?? 'none',
+      ssid: j['ssid'] as String? ?? '',
+      ip: j['ip'] as String? ?? '',
+      signalDbm: (j['signalDbm'] as num?)?.toInt() ?? 0,
+      connected: j['connected'] as bool? ?? false,
+      networkInterface: j['interface'] as String? ?? '',
+    );
+  }
+
+  Future<List<WifiNetwork>> getWifi() async {
+    final j = await _callAt(_wifiBase, 'GetWifi');
+    final networks =
+        (j['networks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    return networks
+        .map((n) => WifiNetwork(
+              ssid: n['ssid'] as String? ?? '',
+              security: n['security'] as String? ?? '',
+              priority: (n['priority'] as num?)?.toInt() ?? 0,
+              password: n['password'] as String?,
+            ))
+        .toList();
+  }
+
+  Future<void> updateWifi(List<WifiNetwork> networks) async {
+    await _callAt(_wifiBase, 'UpdateWifi', {
+      'config': {
+        'networks': networks
+            .map((n) => {
+                  'ssid': n.ssid,
+                  'security': n.security,
+                  'priority': n.priority,
+                  if (n.password != null && n.password!.isNotEmpty)
+                    'password': n.password,
+                })
+            .toList(),
+      },
+    });
+  }
+
+  Future<List<ScannedNetwork>> scanWifi() async {
+    final j = await _callAt(_wifiBase, 'ScanWifi');
+    final networks =
+        (j['networks'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    return networks.map((n) {
+      final dbm = (n['signalDbm'] as num?)?.toInt() ?? -90;
+      // Convert dBm to rough percentage: -30 dBm = 100%, -90 dBm = 0%
+      final pct = ((dbm + 90) * 100 ~/ 60).clamp(0, 100);
+      return ScannedNetwork(
+        ssid: n['ssid'] as String? ?? '',
+        security: n['security'] as String? ?? '',
+        signal: pct,
+      );
+    }).toList();
+  }
+
+  // ── HotspotConfig (rich model) ───────────────────────────────────────────
+
+  /// Returns the hotspot config mapped to the [HotspotConfig] model.
+  Future<HotspotConfig> getHotspotConfig() async {
+    final j = await _call('GetHotspot');
+    return _hotspotFromProto(j);
+  }
+
+  /// Fetches current config, merges [config] fields, and saves via UpdateHotspot.
+  Future<void> saveHotspotConfig(HotspotConfig config) async {
+    final raw = await _call('GetHotspot');
+    await _call('UpdateHotspot', {'config': _mergeHotspot(raw, config)});
+  }
+
+  static HotspotConfig _hotspotFromProto(Map<String, dynamic> j) {
+    final dmr = j['dmr'] as Map<String, dynamic>? ?? {};
+    final ysf = j['ysf'] as Map<String, dynamic>? ?? {};
+    final cm = j['crossMode'] as Map<String, dynamic>? ?? {};
+    return HotspotConfig(
+      rfFrequencyMhz: (j['rfFrequency'] as num?)?.toDouble() ?? 0.0,
+      dmr: DmrConfig(
+        enabled: dmr['enabled'] as bool? ?? false,
+        colorcode: (dmr['colorcode'] as num?)?.toInt() ?? 1,
+        masterServer: dmr['server'] as String? ?? '',
+        password: dmr['password'] as String? ?? '',
+        dmrId: (dmr['dmrId'] as num?)?.toInt() ?? 0,
+        talkgroups: ((dmr['talkgroups'] as List?) ?? [])
+            .cast<Map<String, dynamic>>()
+            .map((t) => Talkgroup(
+                  id: (t['tg'] as num?)?.toInt() ?? 0,
+                  slot: (t['slot'] as num?)?.toInt() ?? 1,
+                  name: t['name'] as String? ?? '',
+                ))
+            .toList(),
+      ),
+      ysf: YsfConfig(
+        enabled: ysf['enabled'] as bool? ?? false,
+        reflector: ysf['reflector'] as String? ?? '',
+        description: ysf['description'] as String? ?? '',
+      ),
+      ysf2dmr: CrossModeConfig(enabled: cm['ysf2dmrEnabled'] as bool? ?? false),
+      dmr2ysf: CrossModeConfig(enabled: cm['dmr2ysfEnabled'] as bool? ?? false),
+    );
+  }
+
+  static Map<String, dynamic> _mergeHotspot(
+      Map<String, dynamic> raw, HotspotConfig config) {
+    final j = Map<String, dynamic>.from(raw);
+    j['rfFrequency'] = config.rfFrequencyMhz;
+
+    final dmr = Map<String, dynamic>.from(
+        (j['dmr'] as Map<String, dynamic>?) ?? {});
+    dmr['enabled'] = config.dmr.enabled;
+    dmr['colorcode'] = config.dmr.colorcode;
+    dmr['server'] = config.dmr.masterServer;
+    dmr['password'] = config.dmr.password;
+    dmr['dmrId'] = config.dmr.dmrId;
+    dmr['talkgroups'] = config.dmr.talkgroups
+        .map((t) => {'tg': t.id, 'slot': t.slot, 'name': t.name})
+        .toList();
+    j['dmr'] = dmr;
+
+    final ysf = Map<String, dynamic>.from(
+        (j['ysf'] as Map<String, dynamic>?) ?? {});
+    ysf['enabled'] = config.ysf.enabled;
+    ysf['reflector'] = config.ysf.reflector;
+    ysf['description'] = config.ysf.description;
+    j['ysf'] = ysf;
+
+    final cm = Map<String, dynamic>.from(
+        (j['crossMode'] as Map<String, dynamic>?) ?? {});
+    cm['ysf2dmrEnabled'] = config.ysf2dmr.enabled;
+    cm['dmr2ysfEnabled'] = config.dmr2ysf.enabled;
+    j['crossMode'] = cm;
+
+    return j;
   }
 
   // ── Hotspot ─────────────────────────────────────────────────────────────
@@ -204,11 +377,14 @@ class OpenRigHotspotClient {
     try {
       final request = http.Request(
         'POST',
-        _uri('$_base/StreamLastHeard'),
+        _uri('$_hotspotBase/StreamLastHeard'),
       );
       request.headers['Content-Type'] = 'application/connect+json';
       request.headers['Connect-Protocol-Version'] = '1';
-      request.body = '{}';
+      // Connect streaming protocol: request body must also be envelope-framed.
+      // 5-byte header: flags=0x00, length=2 (big-endian), then '{}'.
+      request.bodyBytes =
+          Uint8List.fromList([0x00, 0x00, 0x00, 0x00, 0x02, 0x7B, 0x7D]);
 
       final streamed = await client.send(request);
       if (streamed.statusCode != 200) {
