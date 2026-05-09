@@ -23,3 +23,4 @@ export 'src/grid_utils.dart';
 export 'src/spot_utils.dart';
 export 'src/qrz_logbook_client.dart';
 export 'src/qrz_xml_client.dart';
+export 'src/openrig_hotspot_client.dart';
