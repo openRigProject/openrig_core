@@ -359,21 +359,40 @@ class OpenRigHotspotClient {
 
   /// Streams last-heard entries from the device in real time.
   ///
-  /// The stream delivers the existing cache (oldest-first) followed by
-  /// live entries as transmissions complete. The stream runs until the
-  /// returned [StreamController] is cancelled or the connection drops,
-  /// at which point it can be restarted.
-  ///
-  /// Uses the Connect streaming protocol over HTTP/1.1 (envelope-framed
-  /// JSON messages, 5-byte header per message).
+  /// The stream reconnects automatically after any disconnection using
+  /// exponential backoff (2 s → 4 s → … → 30 s max). The backoff resets
+  /// to 2 s after each successful connection. The stream only terminates
+  /// when the caller cancels the subscription.
   Stream<HotspotLastHeardEntry> streamLastHeard() {
-    final controller = StreamController<HotspotLastHeardEntry>();
-    _runStream(controller);
+    late StreamController<HotspotLastHeardEntry> controller;
+    controller = StreamController<HotspotLastHeardEntry>(
+      onCancel: () => controller.close(),
+    );
+    _runStreamLoop(controller);
     return controller.stream;
   }
 
-  void _runStream(StreamController<HotspotLastHeardEntry> controller) async {
+  void _runStreamLoop(
+      StreamController<HotspotLastHeardEntry> controller) async {
+    var delaySeconds = 2;
+    while (!controller.isClosed) {
+      final gotData = await _attemptStream(controller);
+      if (controller.isClosed) break;
+      // Reset backoff after a successful connection; otherwise back off.
+      delaySeconds = gotData ? 2 : (delaySeconds * 2).clamp(2, 30);
+      await Future.delayed(Duration(seconds: delaySeconds));
+    }
+  }
+
+  /// Runs a single StreamLastHeard connection attempt.
+  ///
+  /// Delivers messages to [controller] until the connection drops or the
+  /// controller is closed. Returns `true` if at least one message was
+  /// received (used to reset reconnect backoff).
+  Future<bool> _attemptStream(
+      StreamController<HotspotLastHeardEntry> controller) async {
     final client = http.Client();
+    var gotData = false;
     try {
       final request = http.Request(
         'POST',
@@ -387,17 +406,14 @@ class OpenRigHotspotClient {
           Uint8List.fromList([0x00, 0x00, 0x00, 0x00, 0x02, 0x7B, 0x7D]);
 
       final streamed = await client.send(request);
-      if (streamed.statusCode != 200) {
-        throw HotspotClientException(
-            'StreamLastHeard HTTP ${streamed.statusCode}');
-      }
+      if (streamed.statusCode != 200) return false;
 
       // Connect streaming protocol: each message is preceded by a 5-byte
       // envelope: [flags(1)] [length(4, big-endian)].
       // flags & 0x02 != 0  →  end-of-stream (trailers envelope)
       final buf = <int>[];
       await for (final chunk in streamed.stream) {
-        if (controller.isClosed) break;
+        if (controller.isClosed) return gotData;
         buf.addAll(chunk);
         while (buf.length >= 5) {
           final flags = buf[0];
@@ -409,28 +425,25 @@ class OpenRigHotspotClient {
           final msgBytes = buf.sublist(5, 5 + msgLen);
           buf.removeRange(0, 5 + msgLen);
 
-          if (flags & 0x02 != 0) {
-            // Trailers / end-of-stream envelope
-            if (!controller.isClosed) controller.close();
-            return;
-          }
+          if (flags & 0x02 != 0) return gotData; // end-of-stream trailer
 
           try {
-            final map = jsonDecode(utf8.decode(msgBytes)) as Map<String, dynamic>;
+            final map =
+                jsonDecode(utf8.decode(msgBytes)) as Map<String, dynamic>;
             if (!controller.isClosed) {
               controller.add(HotspotLastHeardEntry.fromJson(map));
+              gotData = true;
             }
           } catch (_) {
             // Malformed message — skip
           }
         }
       }
-      if (!controller.isClosed) controller.close();
-    } catch (e, st) {
-      if (!controller.isClosed) controller.addError(e, st);
-      if (!controller.isClosed) controller.close();
+    } catch (_) {
+      // Connection error — caller will retry after backoff
     } finally {
       client.close();
     }
+    return gotData;
   }
 }
