@@ -318,25 +318,16 @@ class OpenRigHotspotClient {
     await _call('UpdateHotspot', {'config': config});
   }
 
-  /// Links to a YSF reflector by fetching the current config, updating the
-  /// reflector field, and saving. Returns the link state after the update.
+  /// Links to a YSF reflector by sending a live MQTT command to the running
+  /// YSFGateway. Does not touch the saved config (use UpdateHotspot for that).
   Future<void> linkYsf(String reflector) async {
-    final config = await getHotspot();
-    final ysf = Map<String, dynamic>.from(
-        (config['ysf'] as Map<String, dynamic>?) ?? {});
-    ysf['reflector'] = reflector;
-    config['ysf'] = ysf;
-    await updateHotspot(config);
+    await _call('LinkYsf', {'reflector': reflector});
   }
 
-  /// Unlinks from the current YSF reflector.
+  /// Unlinks from the current YSF reflector by sending a live MQTT command.
+  /// Does not touch the saved config (use UpdateHotspot for that).
   Future<void> unlinkYsf() async {
-    final config = await getHotspot();
-    final ysf = Map<String, dynamic>.from(
-        (config['ysf'] as Map<String, dynamic>?) ?? {});
-    ysf['reflector'] = '';
-    config['ysf'] = ysf;
-    await updateHotspot(config);
+    await _call('UnlinkYsf');
   }
 
   // ── Servers ─────────────────────────────────────────────────────────────
