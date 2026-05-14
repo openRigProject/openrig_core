@@ -318,17 +318,30 @@ class OpenRigHotspotClient {
     await _call('UpdateHotspot', {'config': config});
   }
 
-  /// Links to a YSF reflector by sending a live MQTT command to the running
-  /// YSFGateway. Does not touch the saved config (use UpdateHotspot for that).
-  Future<void> linkYsf(String reflector) async {
-    await _call('LinkYsf', {'reflector': reflector});
+  /// Sends a live command to a gateway via the webprovision /gateway-cmd
+  /// endpoint (port 80), which publishes an MQTT message to the running
+  /// gateway process. Does not touch the saved config.
+  Future<void> _gatewayCmd(String gateway, String command) async {
+    final uri = Uri.parse('http://$host:80/gateway-cmd');
+    final resp = await _http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'gateway': gateway, 'command': command}),
+    );
+    if (resp.statusCode != 200) {
+      throw HotspotClientException(
+          'gateway-cmd returned HTTP ${resp.statusCode}: ${resp.body}');
+    }
   }
 
+  /// Links to a YSF reflector by sending a live MQTT command to the running
+  /// YSFGateway. Does not touch the saved config.
+  Future<void> linkYsf(String reflector) =>
+      _gatewayCmd('ysf', 'LinkYSF $reflector');
+
   /// Unlinks from the current YSF reflector by sending a live MQTT command.
-  /// Does not touch the saved config (use UpdateHotspot for that).
-  Future<void> unlinkYsf() async {
-    await _call('UnlinkYsf');
-  }
+  /// Does not touch the saved config.
+  Future<void> unlinkYsf() => _gatewayCmd('ysf', 'UnLink');
 
   // ── Servers ─────────────────────────────────────────────────────────────
 
