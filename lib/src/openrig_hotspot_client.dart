@@ -343,6 +343,17 @@ class OpenRigHotspotClient {
   /// Does not touch the saved config.
   Future<void> unlinkYsf() => _gatewayCmd('ysf', 'UnLink');
 
+  /// Connects to the DMR network by sending an "enable net1" MQTT command.
+  Future<void> connectDmr() => _gatewayCmd('dmr', 'enable net1');
+
+  /// Disconnects from the DMR network by sending a "disable net1" MQTT command.
+  Future<void> disconnectDmr() => _gatewayCmd('dmr', 'disable net1');
+
+  /// Dynamically joins a DMR talkgroup by sending a "link <slot> <tg>" MQTT command.
+  /// This is a live, session-based activation — not persisted to config.
+  Future<void> joinDmrTg(int tg, int slot) =>
+      _gatewayCmd('dmr', 'link $slot $tg');
+
   // ── Servers ─────────────────────────────────────────────────────────────
 
   /// Returns the list of YSF reflectors (or BrandMeister servers, etc.)
