@@ -24,3 +24,6 @@ export 'src/spot_utils.dart';
 export 'src/qrz_logbook_client.dart';
 export 'src/qrz_xml_client.dart';
 export 'src/openrig_hotspot_client.dart';
+export 'src/pota_client.dart';
+export 'src/sota_client.dart';
+export 'src/aprs_fi_client.dart';
